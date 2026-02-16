@@ -1,5 +1,7 @@
 # Tutor Timer
 
+[![Build](https://github.com/ThatOneSam/Tutor-Timer/actions/workflows/build.yml/badge.svg)](https://github.com/ThatOneSam/Tutor-Timer/actions/workflows/build.yml)
+
 A [RuneLite](https://runelite.net/) plugin that tracks the 30-minute cooldown for claiming free runes and training arrows from the combat tutors in Lumbridge.
 
 ## How It Works
