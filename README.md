@@ -25,35 +25,6 @@ This plugin listens for the claim and starts a countdown so you know exactly whe
 - `Notify when ready` - Sends a desktop notification when the cooldown expires.
 - `Show seconds` - Toggle seconds in the countdown display.
 
-## Installation
-
-### From RuneLite Plugin Hub
-1. Open RuneLite
-2. Click the wrench icon (Configuration)
-3. Navigate to Plugin Hub
-4. Search for "Tutor Timer"
-5. Click Install
-
-### Manual Installation (for development)
-1. Clone this repository
-2. Run `./gradlew build`
-3. The plugin JAR will be in `build/libs/`
-
-## Development
-
-This plugin is built with Gradle and requires JDK 11+.
-
-```bash
-# Run tests
-./gradlew test
-
-# Build plugin JAR
-./gradlew build
-
-# Run in development mode
-./gradlew run
-```
-
 ## License
 
 See [LICENSE](LICENSE) file for details.
