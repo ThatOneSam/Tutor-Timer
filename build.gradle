@@ -111,7 +111,8 @@ tasks.register('clearRunLog') {
 		}
 
 		if (!deleted) {
-			println "Could not delete build/run.log - it may be locked by another process. Close processes that use the file (IDE/Gradle/RuneLite) or reboot."
+			println "Could not delete build/run.log - it may be locked by another process."
+			println "Close processes that use the file (IDE/Gradle/RuneLite) or reboot."
 		}
 	}
 }
