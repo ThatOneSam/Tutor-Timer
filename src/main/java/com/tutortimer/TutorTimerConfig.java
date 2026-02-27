@@ -10,7 +10,7 @@ public interface TutorTimerConfig extends Config
     @ConfigItem(
         keyName = "showInfoBox",
         name = "Show info box",
-        description = "Togggle visibility of the info box timer",
+        description = "Toggle visibility of the info box timer",
         position = 0
     )
     default boolean showInfoBox()
