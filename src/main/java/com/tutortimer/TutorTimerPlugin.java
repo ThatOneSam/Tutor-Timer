@@ -36,6 +36,7 @@ public class TutorTimerPlugin extends Plugin
     private static final String CONFIG_GROUP = "tutortimer";
     private static final String LAST_CLAIM_KEY = "lastClaim";
     private static final String LAST_KNOWN_COOLDOWN_KEY = "lastKnownCooldown";
+    private static final String LAST_SHUTDOWN_KEY = "lastShutdown";
 
     // Success triggers: these only appear when items are actually given
     private static final String MIKASI_GIVES = "Mikasi gives you";
@@ -83,24 +84,53 @@ public class TutorTimerPlugin extends Plugin
     @Override
     protected void startUp()
     {
-        log.info("Tutor Timer started");
-        loadLastClaimTime();
-        addInfoBox();
+        try
+        {
+            log.info("Tutor Timer starting");
+            loadLastClaimTime();
+            addInfoBox();
+            log.info("Tutor Timer started");
+        }
+        catch (Exception ex)
+        {
+            // Log and swallow to avoid an uncaught exception disabling the plugin without any trace
+            log.error("Tutor Timer startup failed", ex);
+        }
     }
 
     @Override
     protected void shutDown()
     {
-        log.info("Tutor Timer stopped");
-        removeInfoBox();
+        try
+        {
+            log.info("Tutor Timer shutting down");
+            // remember when we shut down so we can detect stale data on next start
+            long now = System.currentTimeMillis();
+            configManager.setConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY, String.valueOf(now));
+
+            removeInfoBox();
+            log.info("Tutor Timer stopped");
+        }
+        catch (Exception ex)
+        {
+            log.error("Tutor Timer shutdown encountered an error", ex);
+        }
     }
 
     private void addInfoBox()
     {
-        removeInfoBox();
-        BufferedImage icon = itemManager.getImage(558); // MIND_RUNE item ID
-        infoBox = new TutorTimerInfoBox(icon, this);
-        infoBoxManager.addInfoBox(infoBox);
+        // fail-safe wrapper to avoid throwing during startup
+        try
+        {
+            removeInfoBox();
+            BufferedImage icon = itemManager.getImage(558); // MIND_RUNE item ID
+            infoBox = new TutorTimerInfoBox(icon, this);
+            infoBoxManager.addInfoBox(infoBox);
+        }
+        catch (Exception ex)
+        {
+            log.error("Unable to create info box", ex);
+        }
     }
 
     private void removeInfoBox()
@@ -158,6 +188,36 @@ public class TutorTimerPlugin extends Plugin
                 lastKnownCooldownTime = null;
             }
         }
+
+        // Read shutdown timestamp and purge any stale claim if necessary
+        String savedShutdown = configManager.getConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY);
+        log.debug("Loaded lastShutdown config value: {}", savedShutdown);
+        if (savedShutdown != null && lastClaimTime != null)
+        {
+            try
+            {
+                long shutdownTs = Long.parseLong(savedShutdown);
+                Instant shutdown = Instant.ofEpochMilli(shutdownTs);
+                Instant expire = lastClaimTime.plus(COOLDOWN);
+                if (shutdown.isAfter(lastClaimTime) && shutdown.isBefore(expire))
+                {
+                    // user disabled plugin during active cooldown -> state is stale
+                    log.debug("Detected stale lastClaimTime (shutdown during cooldown), clearing stored claim");
+                    lastClaimTime = null;
+                    knownOnCooldown = false;
+                    lastKnownCooldownTime = null;
+                    configManager.setConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY, null);
+                    configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+                }
+            }
+            catch (NumberFormatException e)
+            {
+                // ignore malformed shutdown value
+            }
+        }
+
+        // always clear the shutdown key so it doesn't persist beyond first load
+        configManager.setConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY, null);
     }
 
     private void saveLastClaimTime()
@@ -214,9 +274,21 @@ public class TutorTimerPlugin extends Plugin
         configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
     }
 
-    private void handleTutorIntro(String msg)
+    /* package-private for tests */
+    void handleTutorIntro(String msg)
     {
         log.info("Tutor intro detected — treating as possible known-cooldown (message='{}')", msg);
+
+        // if we thought we were ready already, clear stale claim state
+        if (lastClaimTime != null && isReady())
+        {
+            log.debug("Intro while ready; clearing stale lastClaimTime");
+            lastClaimTime = null;
+            knownOnCooldown = false;
+            lastKnownCooldownTime = null;
+            configManager.setConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY, null);
+            configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+        }
 
         if (lastClaimTime == null)
         {
@@ -230,9 +302,22 @@ public class TutorTimerPlugin extends Plugin
         }
     }
 
-    private void handleCooldownRejection(String msg)
+    /* package-private for tests */
+    void handleCooldownRejection(String msg)
     {
         log.info("Cooldown rejection detected — storing known-cooldown (message='{}')", msg);
+
+        // if we thought we were ready already, clear stale claim state
+        if (lastClaimTime != null && isReady())
+        {
+            log.debug("Cooldown rejection while ready; clearing stale lastClaimTime");
+            lastClaimTime = null;
+            knownOnCooldown = false;
+            lastKnownCooldownTime = null;
+            configManager.setConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY, null);
+            configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+        }
+
         lastKnownCooldownTime = Instant.now();
         knownOnCooldown = true;
         if (lastKnownCooldownTime != null)
@@ -293,6 +378,20 @@ public class TutorTimerPlugin extends Plugin
         }
     }
 
+    // Package-private for tests
+    void openLogFolder()
+    {
+        String runeliteDir = System.getProperty("user.home") + "/.runelite/logs";
+        try
+        {
+            java.awt.Desktop.getDesktop().open(new java.io.File(runeliteDir));
+        }
+        catch (Exception e)
+        {
+            log.error("Failed to open log folder", e);
+        }
+    }
+
     @Subscribe
     public void onConfigChanged(ConfigChanged event)
     {
@@ -304,12 +403,15 @@ public class TutorTimerPlugin extends Plugin
             return;
         }
 
-        removeInfoBox();
-
-        if (notifier != null)
+        // if user clicked the open log folder button, try to launch the directory
+        if ("openLogFolder".equals(event.getKey()))
         {
-            notifier.notify("Tutor Timer: saved timer cleared");
+            openLogFolder();
+            // nothing else to do; the config value remains false
+            return;
         }
+
+        removeInfoBox();
     }
 
     //Tooltip text used by the InfoBox.

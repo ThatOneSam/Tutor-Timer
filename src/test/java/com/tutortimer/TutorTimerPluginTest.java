@@ -12,6 +12,7 @@ import java.time.Instant;
 
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.client.events.ConfigChanged;
 
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
@@ -215,6 +216,9 @@ public class TutorTimerPluginTest
         Field lastClaim = TutorTimerPlugin.class.getDeclaredField("lastClaimTime");
         lastClaim.setAccessible(true);
         assertEquals(Instant.ofEpochMilli(epoch), lastClaim.get(plugin));
+
+        // shutdown key should be cleared even if it wasn't set
+        verify(cfg).setConfiguration(eq("tutortimer"), eq("lastShutdown"), isNull());
     }
 
     @Test
@@ -439,6 +443,117 @@ public class TutorTimerPluginTest
         Field lastKnownField = TutorTimerPlugin.class.getDeclaredField("lastKnownCooldownTime");
         lastKnownField.setAccessible(true);
         assertNull(lastKnownField.get(plugin));
+    }
+
+    @Test
+    public void shutDown_recordsShutdownTime() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        net.runelite.client.config.ConfigManager cfg = mock(net.runelite.client.config.ConfigManager.class);
+        Field cfgField = TutorTimerPlugin.class.getDeclaredField("configManager");
+        cfgField.setAccessible(true);
+        cfgField.set(plugin, cfg);
+
+        // call shutDown and verify config written
+        plugin.shutDown();
+        verify(cfg).setConfiguration(eq("tutortimer"), eq("lastShutdown"), anyString());
+    }
+
+    @Test
+    public void loadLastClaimTime_clearsStaleClaimWhenDisabledDuringCooldown() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        long now = System.currentTimeMillis();
+        long claim = now - Duration.ofMinutes(10).toMillis();
+        long shutdown = now - Duration.ofMinutes(5).toMillis();
+
+        net.runelite.client.config.ConfigManager cfg = mock(net.runelite.client.config.ConfigManager.class);
+        when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn(String.valueOf(claim));
+        when(cfg.getConfiguration("tutortimer", "lastKnownCooldown")).thenReturn(null);
+        when(cfg.getConfiguration("tutortimer", "lastShutdown")).thenReturn(String.valueOf(shutdown));
+
+        Field cfgField = TutorTimerPlugin.class.getDeclaredField("configManager");
+        cfgField.setAccessible(true);
+        cfgField.set(plugin, cfg);
+
+        Method load = TutorTimerPlugin.class.getDeclaredMethod("loadLastClaimTime");
+        load.setAccessible(true);
+        load.invoke(plugin);
+
+        Field lastClaim = TutorTimerPlugin.class.getDeclaredField("lastClaimTime");
+        lastClaim.setAccessible(true);
+        assertNull("stale claim should be cleared", lastClaim.get(plugin));
+        verify(cfg).setConfiguration(eq("tutortimer"), eq("lastClaim"), isNull());
+        verify(cfg).setConfiguration(eq("tutortimer"), eq("lastShutdown"), isNull());
+    }
+
+    @Test
+    public void handleCooldownRejection_clearsStaleClaim() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        // set claim in past such that isReady() == true
+        Field lastClaim = TutorTimerPlugin.class.getDeclaredField("lastClaimTime");
+        lastClaim.setAccessible(true);
+        lastClaim.set(plugin, Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1));
+
+        net.runelite.client.config.ConfigManager cfg = mock(net.runelite.client.config.ConfigManager.class);
+        Field cfgField = TutorTimerPlugin.class.getDeclaredField("configManager");
+        cfgField.setAccessible(true);
+        cfgField.set(plugin, cfg);
+
+        plugin.handleCooldownRejection("... every half an hour ...");
+
+        assertNull(lastClaim.get(plugin));
+        verify(cfg).setConfiguration(eq("tutortimer"), eq("lastClaim"), isNull());
+    }
+
+    @Test
+    public void handleTutorIntro_clearsStaleClaim() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        Field lastClaim = TutorTimerPlugin.class.getDeclaredField("lastClaimTime");
+        lastClaim.setAccessible(true);
+        lastClaim.set(plugin, Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1));
+
+        net.runelite.client.config.ConfigManager cfg = mock(net.runelite.client.config.ConfigManager.class);
+        Field cfgField = TutorTimerPlugin.class.getDeclaredField("configManager");
+        cfgField.setAccessible(true);
+        cfgField.set(plugin, cfg);
+
+        plugin.handleTutorIntro("I work with the Magic tutor");
+
+        assertNull(lastClaim.get(plugin));
+        verify(cfg).setConfiguration(eq("tutortimer"), eq("lastClaim"), isNull());
+    }
+
+    @Test
+    public void startUp_doesNotThrowOnNullDependencies() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        // don't initialize any fields, just call startUp
+        plugin.startUp();
+        // if no exception thrown we consider test passed
+    }
+
+    @Test
+    public void onConfigChanged_openLogFolderInvoked() throws Exception
+    {
+        class TestPlugin extends TutorTimerPlugin
+        {
+            boolean opened = false;
+            @Override
+            void openLogFolder()
+            {
+                opened = true;
+            }
+        }
+        TestPlugin plugin = new TestPlugin();
+        // create bogus event
+        ConfigChanged ev = mock(ConfigChanged.class);
+        when(ev.getGroup()).thenReturn("tutortimer");
+        when(ev.getKey()).thenReturn("openLogFolder");
+        plugin.onConfigChanged(ev);
+        assertTrue("openLogFolder should have been invoked", plugin.opened);
     }
 }
 

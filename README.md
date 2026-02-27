@@ -25,9 +25,19 @@ when to come back. The timer shows up as an info box with a mind‑rune icon.
 | `12:34`     | Time remaining until you can claim again                        |
 | **Ready!**  | Go grab your free stuff!                                        |
 
+> **Note:** if you disable the plugin while on cooldown then re-enable it,
+> the timer will forget the old claim and show `?` (unknown) instead of
+> erroneously displaying **Ready!**. It also resets if you talk to a tutor and
+> receive the “come back later” message while the timer thought it was ready.
+
 ---
 
 ## Settings
+
+The plugin also now includes a small help section at the bottom of the
+settings panel. Clicking **Open log folder** will open your RuneLite log
+directory; please include the most recent `.log` file when filing bug reports.
+
 
 - **Show info box only when ready** – when enabled, the info box is hidden
   until the cooldown expires and the timer shows **Ready!**. (Default:

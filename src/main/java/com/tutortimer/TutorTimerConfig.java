@@ -50,4 +50,19 @@ public interface TutorTimerConfig extends Config
     {
         return true;
     }
+
+    // ---------------------------------------------------------------------
+    // Debug / support helpers
+    // ---------------------------------------------------------------------
+
+    @ConfigItem(
+        keyName = "openLogFolder",
+        name = "Open log folder",
+        description = "Opens your RuneLite logs directory (include the file when reporting bugs)",
+        position = 50
+    )
+    default boolean openLogFolder()
+    {
+        return false;
+    }
 }
