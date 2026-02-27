@@ -83,7 +83,14 @@ public class TutorTimerPluginTest
     public void getTimerText_showsSecondsWhenConfigured() throws Exception
     {
         TutorTimerPlugin plugin = new TutorTimerPlugin();
-        setField(plugin, "config", new TutorTimerConfig() { });
+        setField(plugin, "config", new TutorTimerConfig()
+        {
+            @Override
+            public boolean showSeconds()
+            {
+                return true;
+            }
+        });
         setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(Duration.ofMinutes(29)).minusSeconds(30)));
         assertTrue(plugin.getTimerText().matches("\\d+:\\d{2}"));
     }
@@ -94,13 +101,13 @@ public class TutorTimerPluginTest
         TutorTimerPlugin plugin = new TutorTimerPlugin();
         setField(plugin, "config", new TutorTimerConfig() { });
 
-        assertEquals("Tutor Timer - Claim runes or arrows to start tracking", plugin.getTooltipText());
+        assertEquals("Tutor Timer - claim runes or arrows to start tracking", plugin.getTooltipText());
 
         setField(plugin, "knownOnCooldown", true);
-        assertEquals("Tutor Timer - On cooldown, but unknown time remaining", plugin.getTooltipText());
+        assertEquals("Tutor Timer - on cooldown, but unknown time remaining", plugin.getTooltipText());
 
         setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1)));
-        assertEquals("Tutor Timer - Ready to claim!", plugin.getTooltipText());
+        assertEquals("Tutor Timer - ready to claim!", plugin.getTooltipText());
 
         setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(Duration.ofMinutes(29)).minusSeconds(30)));
         String tooltip = plugin.getTooltipText();
@@ -254,6 +261,67 @@ public class TutorTimerPluginTest
 
         Object val = getField(plugin, "lastClaimTime");
         assertFalse("stale claim should be cleared", ((java.util.Optional<?>) val).isPresent());
+    }
+
+    @Test
+    public void loadLastClaimTime_doesNotClearClaimWhenShutdownOutsideWindow() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        long now = System.currentTimeMillis();
+        long claim = now - Duration.ofMinutes(10).toMillis();
+        // shutdown either before the claim or after expiry
+        long shutdown = now - Duration.ofMinutes(40).toMillis();
+
+        ConfigManager cfg = mock(ConfigManager.class);
+        when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn(String.valueOf(claim));
+        when(cfg.getConfiguration("tutortimer", "lastKnownCooldown")).thenReturn(null);
+        when(cfg.getConfiguration("tutortimer", "lastShutdown")).thenReturn(String.valueOf(shutdown));
+        setField(plugin, "configManager", cfg);
+
+        plugin.loadLastClaimTime();
+
+        Object val = getField(plugin, "lastClaimTime");
+        assertTrue("claim should survive when shutdown outside cooldown", ((java.util.Optional<?>) val).isPresent());
+    }
+
+    @Test
+    public void loadLastClaimTime_keepsClaimWhenNoShutdownKey() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        long now = System.currentTimeMillis();
+        long claim = now - Duration.ofMinutes(10).toMillis();
+        long shutdown = -1; // not used
+
+        ConfigManager cfg = mock(ConfigManager.class);
+        when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn(String.valueOf(claim));
+        when(cfg.getConfiguration("tutortimer", "lastKnownCooldown")).thenReturn(null);
+        when(cfg.getConfiguration("tutortimer", "lastShutdown")).thenReturn(null);
+        setField(plugin, "configManager", cfg);
+
+        plugin.loadLastClaimTime();
+
+        Object val = getField(plugin, "lastClaimTime");
+        assertTrue("claim should remain when shutdown key absent", ((java.util.Optional<?>) val).isPresent());
+    }
+
+    @Test
+    public void loadLastClaimTime_handlesMalformedShutdown() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        long now = System.currentTimeMillis();
+        long claim = now - Duration.ofMinutes(10).toMillis();
+
+        ConfigManager cfg = mock(ConfigManager.class);
+        when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn(String.valueOf(claim));
+        when(cfg.getConfiguration("tutortimer", "lastKnownCooldown")).thenReturn(null);
+        when(cfg.getConfiguration("tutortimer", "lastShutdown")).thenReturn("not-a-number");
+        setField(plugin, "configManager", cfg);
+
+        plugin.loadLastClaimTime();
+
+        Object val = getField(plugin, "lastClaimTime");
+        assertTrue("claim should survive when shutdown value malformed", ((java.util.Optional<?>) val).isPresent());
+        // log warning is emitted, but not asserted here
     }
 
     // --- Startup resilience ---

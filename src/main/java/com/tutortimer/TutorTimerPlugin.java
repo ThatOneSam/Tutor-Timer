@@ -90,17 +90,40 @@ public class TutorTimerPlugin extends Plugin
         }
     }
 
-    // Safely clear a config key. Guards against null configManager and the
-    // NPE that ConfigManager.setConfiguration throws for null values.
+    // Attempt to remove a persisted value from the config.  We perform a
+    // quick existence check first to avoid unnecessary work, but the underlying
+    // ConfigManager API has a long‑standing bug: it declares the `value`
+    // parameter @NonNull and immediately throws a NullPointerException when it
+    // receives `null` even though passing `null` is the documented way to clear
+    // an entry.  There is no public "remove" method, so we still need to call
+    // `setConfiguration(..., null)` when an existing value is present.  The
+    // NPE catch below is therefore *not* a blanket catch‑all; it is a specific
+    // guard around this broken behaviour and is logged at debug level so that
+    // it never spams the normal log.
     private void safeClearConfig(String key)
     {
-        if (configManager == null) return;
+        if (configManager == null)
+        {
+            return;
+        }
+
+        String existing = configManager.getConfiguration(CONFIG_GROUP, key);
+        if (existing == null)
+        {
+            // nothing to do; we don't even call setConfiguration
+            return;
+        }
+
         try
         {
-            if (configManager.getConfiguration(CONFIG_GROUP, key) == null) return;
             configManager.setConfiguration(CONFIG_GROUP, key, null);
         }
-        catch (NullPointerException ignored) { // ConfigManager throws NPE for null values
+        catch (NullPointerException npe)
+        {
+            // swallowed: the manager rejects null values.  we treat the key as
+            // cleared regardless and log at debug in case the implementation
+            // changes later.
+            log.debug("ignored NPE clearing config {}: {}", key, npe.toString());
         }
         catch (Exception ex)
         {
@@ -169,7 +192,15 @@ public class TutorTimerPlugin extends Plugin
                     safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
                 }
             }
-            catch (NumberFormatException ignored) { /* Malformed timestamp is silently ignored */ }
+            catch (NumberFormatException e)
+            {
+                log.warn(
+                    "Malformed timestamp '{}' for key '{}' in config group '{}' while detecting stale claim. "
+                        + "The malformed value will be ignored and the plugin will fall back to normal behavior; "
+                        + "you may need to clear the Tutor Timer plugin configuration if this warning persists.",
+                    savedShutdown, LAST_SHUTDOWN_KEY, CONFIG_GROUP, e
+                );
+            }
         }
     }
 
@@ -214,7 +245,7 @@ public class TutorTimerPlugin extends Plugin
         ChatMessageType type = event.getType();
         if (type != ChatMessageType.DIALOG
             && type != ChatMessageType.GAMEMESSAGE
-            && type != ChatMessageType.SPAM
+
             && type != ChatMessageType.MESBOX) return;
 
         String msg = event.getMessage();
@@ -319,11 +350,11 @@ public class TutorTimerPlugin extends Plugin
     public String getTooltipText()
     {
         if (lastClaimTime.isEmpty() && !knownOnCooldown)
-            return "Tutor Timer - Claim runes or arrows to start tracking";
+            return "Tutor Timer - claim runes or arrows to start tracking";
         if (lastClaimTime.isEmpty())
-            return "Tutor Timer - On cooldown, but unknown time remaining";
+            return "Tutor Timer - on cooldown, but unknown time remaining";
         if (isReady())
-            return "Tutor Timer - Ready to claim!";
+            return "Tutor Timer - ready to claim!";
         return "Tutor Timer - " + getTimerText() + " remaining";
     }
 
