@@ -12,7 +12,6 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 
-import javax.annotation.Nullable;
 import javax.inject.Inject;
 import java.awt.image.BufferedImage;
 import java.time.Duration;
@@ -54,8 +53,9 @@ public class TutorTimerPlugin extends Plugin
     @Inject private Notifier notifier;
     @Inject private TutorTimerConfig config;
 
-    @Nullable private Instant lastClaimTime;
-    @Nullable private Instant lastKnownCooldownTime;
+    // use Optionals rather than nullable fields; avoids any risk of NPEs
+    private java.util.Optional<Instant> lastClaimTime = java.util.Optional.empty();
+    private java.util.Optional<Instant> lastKnownCooldownTime = java.util.Optional.empty();
     private boolean knownOnCooldown;
     private boolean notifiedReady;
     private TutorTimerInfoBox infoBox;
@@ -90,10 +90,8 @@ public class TutorTimerPlugin extends Plugin
         }
     }
 
-    /**
-     * Safely clear a config key. Guards against null configManager and the
-     * NPE that ConfigManager.setConfiguration throws for null values.
-     */
+    // Safely clear a config key. Guards against null configManager and the
+    // NPE that ConfigManager.setConfiguration throws for null values.
     private void safeClearConfig(String key)
     {
         if (configManager == null) return;
@@ -102,75 +100,85 @@ public class TutorTimerPlugin extends Plugin
             if (configManager.getConfiguration(CONFIG_GROUP, key) == null) return;
             configManager.setConfiguration(CONFIG_GROUP, key, null);
         }
-        catch (NullPointerException ignored) { }
+        catch (NullPointerException ignored) { // ConfigManager throws NPE for null values
+        }
         catch (Exception ex)
         {
             log.error("Failed to clear config key '{}'", key, ex);
         }
     }
 
-    /** Load persisted state from config. Package-private for tests. */
+    // Load persisted state from config. Package-private for tests.
     void loadLastClaimTime()
     {
         if (configManager == null) return;
 
-        // Last claim time
+        loadLastClaimTimeFromConfig();
+        loadLastKnownCooldownFromConfig();
+        detectStaleClaim();
+        safeClearConfig(LAST_SHUTDOWN_KEY);
+    }
+
+    private void loadLastClaimTimeFromConfig()
+    {
         String saved = configManager.getConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY);
         if (saved != null)
         {
-            try { lastClaimTime = Instant.ofEpochMilli(Long.parseLong(saved)); }
-            catch (NumberFormatException e) { lastClaimTime = null; }
+            try { lastClaimTime = java.util.Optional.of(Instant.ofEpochMilli(Long.parseLong(saved))); }
+            catch (NumberFormatException e) { lastClaimTime = java.util.Optional.empty(); }
         }
+    }
 
-        // Known cooldown (set when the tutor rejects a claim)
+    private void loadLastKnownCooldownFromConfig()
+    {
         String savedKnown = configManager.getConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY);
         if (savedKnown != null)
         {
             try
             {
-                lastKnownCooldownTime = Instant.ofEpochMilli(Long.parseLong(savedKnown));
-                if (lastClaimTime == null && isKnownCooldownActive())
+                lastKnownCooldownTime = java.util.Optional.of(Instant.ofEpochMilli(Long.parseLong(savedKnown)));
+                if (lastClaimTime.isEmpty() && isKnownCooldownActive())
                 {
                     knownOnCooldown = true;
                 }
                 else if (!isKnownCooldownActive())
                 {
-                    lastKnownCooldownTime = null;
+                    lastKnownCooldownTime = java.util.Optional.empty();
                     safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
                 }
             }
-            catch (NumberFormatException e) { lastKnownCooldownTime = null; }
+            catch (NumberFormatException e) { lastKnownCooldownTime = java.util.Optional.empty(); }
         }
+    }
 
-        // Detect stale claim from mid-cooldown shutdown
+    private void detectStaleClaim()
+    {
         String savedShutdown = configManager.getConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY);
-        if (savedShutdown != null && lastClaimTime != null)
+        if (savedShutdown != null && lastClaimTime.isPresent())
         {
             try
             {
                 Instant shutdown = Instant.ofEpochMilli(Long.parseLong(savedShutdown));
-                Instant expire = lastClaimTime.plus(COOLDOWN);
-                if (shutdown.isAfter(lastClaimTime) && shutdown.isBefore(expire))
+                Instant expire = lastClaimTime.get().plus(COOLDOWN);
+                if (shutdown.isAfter(lastClaimTime.get()) && shutdown.isBefore(expire))
                 {
-                    lastClaimTime = null;
+                    lastClaimTime = java.util.Optional.empty();
                     knownOnCooldown = false;
-                    lastKnownCooldownTime = null;
+                    lastKnownCooldownTime = java.util.Optional.empty();
                     safeClearConfig(LAST_CLAIM_KEY);
                     safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
                 }
             }
-            catch (NumberFormatException ignored) { }
+            catch (NumberFormatException ignored) { /* Malformed timestamp is silently ignored */ }
         }
-
-        safeClearConfig(LAST_SHUTDOWN_KEY);
     }
 
     private void saveLastClaimTime()
     {
-        if (lastClaimTime != null)
+        if (lastClaimTime.isPresent())
         {
             configManager.setConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY,
-                String.valueOf(lastClaimTime.toEpochMilli()));
+                String.valueOf(lastClaimTime.get().toEpochMilli()));
         }
     }
 
@@ -228,43 +236,43 @@ public class TutorTimerPlugin extends Plugin
 
     private void handleTutorClaim()
     {
-        lastClaimTime = Instant.now();
+        lastClaimTime = java.util.Optional.of(Instant.now());
         knownOnCooldown = true;
         notifiedReady = false;
         saveLastClaimTime();
-        lastKnownCooldownTime = null;
+        lastKnownCooldownTime = java.util.Optional.empty();
         safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
     }
 
     private void handleTutorIntro()
     {
         clearStaleClaim();
-        if (lastClaimTime == null)
+        if (lastClaimTime.isEmpty())
         {
-            lastKnownCooldownTime = Instant.now();
+            lastKnownCooldownTime = java.util.Optional.of(Instant.now());
             knownOnCooldown = true;
             configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY,
-                String.valueOf(lastKnownCooldownTime.toEpochMilli()));
+                String.valueOf(lastKnownCooldownTime.get().toEpochMilli()));
         }
     }
 
     private void handleCooldownRejection()
     {
         clearStaleClaim();
-        lastKnownCooldownTime = Instant.now();
+        lastKnownCooldownTime = java.util.Optional.of(Instant.now());
         knownOnCooldown = true;
         configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY,
-            String.valueOf(lastKnownCooldownTime.toEpochMilli()));
+            String.valueOf(lastKnownCooldownTime.get().toEpochMilli()));
     }
 
-    /** If the previous claim has expired, clear it so new tracking can start. */
+    // If the previous claim has expired, clear it so new tracking can start.
     private void clearStaleClaim()
     {
-        if (lastClaimTime != null && isReady())
+        if (lastClaimTime.isPresent() && isReady())
         {
-            lastClaimTime = null;
+            lastClaimTime = java.util.Optional.empty();
             knownOnCooldown = false;
-            lastKnownCooldownTime = null;
+            lastKnownCooldownTime = java.util.Optional.empty();
             safeClearConfig(LAST_CLAIM_KEY);
             safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
         }
@@ -288,9 +296,9 @@ public class TutorTimerPlugin extends Plugin
         if (now - lastKnownCooldownExpiryCheck >= KNOWN_COOLDOWN_CHECK_INTERVAL_MS)
         {
             lastKnownCooldownExpiryCheck = now;
-            if (lastClaimTime == null && lastKnownCooldownTime != null && !isKnownCooldownActive())
+            if (lastClaimTime.isEmpty() && lastKnownCooldownTime.isPresent() && !isKnownCooldownActive())
             {
-                lastKnownCooldownTime = null;
+                lastKnownCooldownTime = java.util.Optional.empty();
                 knownOnCooldown = false;
                 safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
             }
@@ -310,9 +318,9 @@ public class TutorTimerPlugin extends Plugin
 
     public String getTooltipText()
     {
-        if (lastClaimTime == null && !knownOnCooldown)
+        if (lastClaimTime.isEmpty() && !knownOnCooldown)
             return "Tutor Timer - Claim runes or arrows to start tracking";
-        if (lastClaimTime == null)
+        if (lastClaimTime.isEmpty())
             return "Tutor Timer - On cooldown, but unknown time remaining";
         if (isReady())
             return "Tutor Timer - Ready to claim!";
@@ -321,10 +329,10 @@ public class TutorTimerPlugin extends Plugin
 
     public String getTimerText()
     {
-        if (lastClaimTime == null)
+        if (lastClaimTime.isEmpty())
             return knownOnCooldown ? "< 30m" : "?";
 
-        Duration elapsed = Duration.between(lastClaimTime, Instant.now());
+        Duration elapsed = Duration.between(lastClaimTime.get(), Instant.now());
         Duration remaining = COOLDOWN.minus(elapsed);
         if (remaining.isNegative() || remaining.isZero()) return "Ready!";
 
@@ -337,18 +345,19 @@ public class TutorTimerPlugin extends Plugin
 
     public boolean isReady()
     {
-        return lastClaimTime != null
-            && Duration.between(lastClaimTime, Instant.now()).compareTo(COOLDOWN) >= 0;
+        return lastClaimTime.isPresent()
+            && Duration.between(lastClaimTime.get(), Instant.now()).compareTo(COOLDOWN) >= 0;
     }
 
     public boolean isUnknown()
     {
-        return lastClaimTime == null;
+        return lastClaimTime.isEmpty();
     }
 
     private boolean isKnownCooldownActive()
     {
-        return lastKnownCooldownTime != null
-            && Instant.now().isBefore(lastKnownCooldownTime.plus(COOLDOWN));
+        return lastKnownCooldownTime
+            .map(t -> Instant.now().isBefore(t.plus(COOLDOWN)))
+            .orElse(false);
     }
 }

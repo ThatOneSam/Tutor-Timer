@@ -72,10 +72,10 @@ public class TutorTimerPluginTest
         TutorTimerPlugin plugin = new TutorTimerPlugin();
         assertFalse(plugin.isReady());
 
-        setField(plugin, "lastClaimTime", Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1));
+        setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1)));
         assertTrue(plugin.isReady());
 
-        setField(plugin, "lastClaimTime", Instant.now());
+        setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now()));
         assertFalse(plugin.isReady());
     }
 
@@ -84,7 +84,7 @@ public class TutorTimerPluginTest
     {
         TutorTimerPlugin plugin = new TutorTimerPlugin();
         setField(plugin, "config", new TutorTimerConfig() { });
-        setField(plugin, "lastClaimTime", Instant.now().minus(Duration.ofMinutes(29)).minusSeconds(30));
+        setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(Duration.ofMinutes(29)).minusSeconds(30)));
         assertTrue(plugin.getTimerText().matches("\\d+:\\d{2}"));
     }
 
@@ -99,10 +99,10 @@ public class TutorTimerPluginTest
         setField(plugin, "knownOnCooldown", true);
         assertEquals("Tutor Timer - On cooldown, but unknown time remaining", plugin.getTooltipText());
 
-        setField(plugin, "lastClaimTime", Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1));
+        setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1)));
         assertEquals("Tutor Timer - Ready to claim!", plugin.getTooltipText());
 
-        setField(plugin, "lastClaimTime", Instant.now().minus(Duration.ofMinutes(29)).minusSeconds(30));
+        setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(Duration.ofMinutes(29)).minusSeconds(30)));
         String tooltip = plugin.getTooltipText();
         assertTrue(tooltip.startsWith("Tutor Timer - "));
         assertTrue(tooltip.endsWith(" remaining"));
@@ -123,7 +123,7 @@ public class TutorTimerPluginTest
         plugin.onChatMessage(ev);
 
         assertTrue((boolean) getField(plugin, "knownOnCooldown"));
-        assertNotNull(getField(plugin, "lastClaimTime"));
+        assertTrue(((java.util.Optional<?>) getField(plugin, "lastClaimTime")).isPresent());
     }
 
     @Test
@@ -151,7 +151,7 @@ public class TutorTimerPluginTest
         ConfigManager cfg = mock(ConfigManager.class);
         when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn("existing");
         setField(plugin, "configManager", cfg);
-        setField(plugin, "lastClaimTime", Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1));
+        setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1)));
 
         ChatMessage ev = mock(ChatMessage.class);
         when(ev.getType()).thenReturn(ChatMessageType.GAMEMESSAGE);
@@ -159,7 +159,8 @@ public class TutorTimerPluginTest
 
         plugin.onChatMessage(ev);
 
-        assertNull(getField(plugin, "lastClaimTime"));
+        Object val1 = getField(plugin, "lastClaimTime");
+        assertFalse(((java.util.Optional<?>) val1).isPresent());
         assertTrue((boolean) getField(plugin, "knownOnCooldown"));
     }
 
@@ -170,7 +171,7 @@ public class TutorTimerPluginTest
         ConfigManager cfg = mock(ConfigManager.class);
         when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn("existing");
         setField(plugin, "configManager", cfg);
-        setField(plugin, "lastClaimTime", Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1));
+        setField(plugin, "lastClaimTime", java.util.Optional.of(Instant.now().minus(TutorTimerPlugin.COOLDOWN).minusSeconds(1)));
 
         ChatMessage ev = mock(ChatMessage.class);
         when(ev.getType()).thenReturn(ChatMessageType.DIALOG);
@@ -178,7 +179,8 @@ public class TutorTimerPluginTest
 
         plugin.onChatMessage(ev);
 
-        assertNull(getField(plugin, "lastClaimTime"));
+        Object val2 = getField(plugin, "lastClaimTime");
+        assertFalse(((java.util.Optional<?>) val2).isPresent());
         assertTrue((boolean) getField(plugin, "knownOnCooldown"));
     }
 
@@ -198,7 +200,8 @@ public class TutorTimerPluginTest
 
         plugin.loadLastClaimTime();
 
-        assertEquals(Instant.ofEpochMilli(epoch), getField(plugin, "lastClaimTime"));
+        Object val = getField(plugin, "lastClaimTime");
+        assertEquals(Instant.ofEpochMilli(epoch), ((java.util.Optional<?>) val).get());
     }
 
     @Test
@@ -249,7 +252,8 @@ public class TutorTimerPluginTest
 
         plugin.loadLastClaimTime();
 
-        assertNull("stale claim should be cleared", getField(plugin, "lastClaimTime"));
+        Object val = getField(plugin, "lastClaimTime");
+        assertFalse("stale claim should be cleared", ((java.util.Optional<?>) val).isPresent());
     }
 
     // --- Startup resilience ---
