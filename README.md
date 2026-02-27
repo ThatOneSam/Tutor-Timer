@@ -38,11 +38,10 @@ The plugin also now includes a small help section at the bottom of the
 settings panel. Clicking **Open log folder** will open your RuneLite log
 directory; please include the most recent `.log` file when filing bug reports.
 
-
+- **Show info box** – master switch for displaying the info box.
 - **Show info box only when ready** – when enabled, the info box is hidden
   until the cooldown expires and the timer shows **Ready!**. (Default:
   disabled; info box is shown at all times.)
-- **Show info box** – master switch for displaying the info box.
 - **Notify when ready** – send a desktop notification when the cooldown
   expires.
 - **Show seconds** – toggle seconds in the countdown display.

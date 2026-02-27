@@ -10,3 +10,7 @@ nbproject/
 .vscode/settings.json
 null-ignored.json
 bin
+
+# local RuneLite development environment
+runelite/
+LOCAL_RUNELITE_SETUP.md

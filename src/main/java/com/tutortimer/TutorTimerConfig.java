@@ -3,6 +3,7 @@ package com.tutortimer;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
 
 @ConfigGroup("tutortimer")
 public interface TutorTimerConfig extends Config
@@ -54,15 +55,35 @@ public interface TutorTimerConfig extends Config
     // ---------------------------------------------------------------------
     // Debug / support helpers
     // ---------------------------------------------------------------------
+    @ConfigSection(
+        name = "Debug",
+        description = "Options for diagnosing issues",
+        position = 50
+    )
+    String debugSection = "debug";
 
     @ConfigItem(
+        section = "debug",
         keyName = "openLogFolder",
-        name = "Open log folder",
-        description = "Opens your RuneLite logs directory (include the file when reporting bugs)",
-        position = 50
+        name = "CLICK HERE TO OPEN DEBUG FOLDER",
+        description = "Opens the Tutor Timer directory containing debug logs",
+        position = 51
     )
     default boolean openLogFolder()
     {
         return false;
     }
+
+    @ConfigItem(
+        section = "debug",
+        keyName = "enableDebugLog",
+        name = "Enable debug log file",
+        description = "Append extra Tutor‑Timer debug messages to ~/.runelite/tutor-timer/debug.log",
+        position = 52
+    )
+    default boolean enableDebugLog()
+    {
+        return false;
+    }
+
 }

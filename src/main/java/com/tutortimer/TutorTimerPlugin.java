@@ -15,6 +15,13 @@ import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
 
@@ -66,6 +73,122 @@ public class TutorTimerPlugin extends Plugin
     @Inject
     private TutorTimerConfig config;
 
+    // ------------------------------------------------------------
+    // Debug log helpers
+    // ------------------------------------------------------------
+
+    /**
+     * Return the path where plugin-specific debug messages are written.
+     * Visible for unit tests.
+     *
+     * We store the file under a dedicated folder so the button can open the
+     * whole directory instead of the generic logs location.
+     */
+    // maximum size of debug file before we reset it (in bytes)
+    // mutable for testing
+    private static long maxDebugFileBytes = 100_000L;
+
+    Path getDebugLogPath()
+    {
+        String home = System.getProperty("user.home");
+        return Paths.get(home, ".runelite", "tutor-timer", "debug.log");
+    }
+
+    private void debugLog(String msg)
+    {
+        if (config == null || !config.enableDebugLog())
+        {
+            return;
+        }
+
+        try
+        {
+            Path path = getDebugLogPath();
+            // make sure parent folder exists
+            if (path.getParent() != null)
+            {
+                Files.createDirectories(path.getParent());
+            }
+
+            // rotate/truncate if file is too large
+            if (Files.exists(path) && Files.size(path) > maxDebugFileBytes)
+            {
+                // overwrite with a header marking rotation
+                Files.writeString(path,
+                    "=== rotated debug log at " + Instant.now() + " ===" + System.lineSeparator(),
+                    StandardOpenOption.TRUNCATE_EXISTING);
+            }
+
+            Files.writeString(path,
+                Instant.now() + " " + msg + System.lineSeparator(),
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        }
+        catch (IOException e)
+        {
+            log.error("Unable to write debug log", e);
+            debugLog("failed to write debug log: " + e.toString());
+        }
+    }
+
+    /**
+     * Safely clear a configuration value, guarding against a null
+     * {@link ConfigManager} and swallowing any unexpected exceptions.
+     *
+     * This helper was added after a startup crash was observed when the
+     * plugin tried to clear a persisted key while ConfigManager had not been
+     * injected yet.  Tests exercise the behaviour indirectly via
+     * {@link #loadLastClaimTime()}, but we also provide a unit test for the
+     * helper itself.
+     */
+    private void safeClearConfig(String key)
+    {
+        if (configManager == null)
+        {
+            debugLog("configManager null when clearing '" + key + "'");
+            return;
+        }
+
+        try
+        {
+            /*
+             * ConfigManager#setConfiguration currently rejects a null value with a
+             * NullPointerException (the parameter is annotated @NonNull).  Clearing a
+             * stored key therefore always throws, which ends up cluttering the log
+             * with benign errors whenever we try to purge a value that doesn't exist
+             * or has already been removed.  Historically we wrapped the call in a
+             * try/catch and logged the exception, but the log output annoyed users
+             * during ordinary operation.
+             *
+             * To minimise noise we snoop the existing value first and only invoke
+             * setConfiguration when there is something to clear.  We also treat
+             * NPEs specially so we never surface them at error level.
+             */
+            String existing = configManager.getConfiguration(CONFIG_GROUP, key);
+            if (existing == null)
+            {
+                debugLog("config '" + key + "' already null, skipping clear");
+                return;
+            }
+
+            configManager.setConfiguration(CONFIG_GROUP, key, null);
+        }
+        catch (Exception ex)
+        {
+            if (ex instanceof NullPointerException)
+            {
+                // this is expected when the manager enforces non-null values; treat
+                // it as a debug-only event to avoid filling the log with errors
+                debugLog("ignored NPE clearing config " + key + ": " + ex.toString());
+            }
+            else
+            {
+                // shouldn't happen, but don't let a failure here crash the plugin
+                log.error("Exception clearing config key {}", key, ex);
+                debugLog("failed to clear config " + key + ": " + ex.toString());
+            }
+        }
+    }
+
     @Nullable
     private Instant lastClaimTime;
 
@@ -81,9 +204,23 @@ public class TutorTimerPlugin extends Plugin
 
     private TutorTimerInfoBox infoBox;
 
+    // track whether we've retried once already
+    private boolean startupRetried = false;
+
     @Override
     protected void startUp()
     {
+        // if the injected configManager isn't ready yet, do one immediate retry
+        // after the first invocation.  this is purely defensive; the framework
+        // normally injects before calling startUp.
+        if (configManager == null && !startupRetried)
+        {
+            startupRetried = true;
+            debugLog("configManager null on first startUp, retrying");
+            startUp();
+            return;
+        }
+
         try
         {
             log.info("Tutor Timer starting");
@@ -95,6 +232,11 @@ public class TutorTimerPlugin extends Plugin
         {
             // Log and swallow to avoid an uncaught exception disabling the plugin without any trace
             log.error("Tutor Timer startup failed", ex);
+
+            // also record full stack trace in debug log
+            StringWriter sw = new StringWriter();
+            ex.printStackTrace(new PrintWriter(sw));
+            debugLog("startup failed: " + sw.toString());
         }
     }
 
@@ -130,6 +272,7 @@ public class TutorTimerPlugin extends Plugin
         catch (Exception ex)
         {
             log.error("Unable to create info box", ex);
+            debugLog("infoBox failure: " + ex.toString());
         }
     }
 
@@ -142,8 +285,23 @@ public class TutorTimerPlugin extends Plugin
         }
     }
 
-    private void loadLastClaimTime()
+    void loadLastClaimTime()
     {
+        loadLastClaimTimeFromConfig();
+        loadLastKnownCooldownFromConfig();
+        handleStaleClaimAfterShutdown();
+        // always clear the shutdown key so it doesn't persist beyond first load
+        safeClearConfig(LAST_SHUTDOWN_KEY);
+    }
+
+    private void loadLastClaimTimeFromConfig()
+    {
+        if (configManager == null)
+        {
+            debugLog("configManager is null, skipping loadLastClaimTimeFromConfig");
+            return;
+        }
+
         String saved = configManager.getConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY);
         // Log what we loaded so it's easy to verify persistence at startup
         log.debug("Loaded lastClaim config value: {}", saved);
@@ -158,6 +316,18 @@ public class TutorTimerPlugin extends Plugin
             {
                 lastClaimTime = null;
             }
+        }
+
+        // log debug if configured
+        debugLog("loaded lastClaim=" + saved);
+    }
+
+    private void loadLastKnownCooldownFromConfig()
+    {
+        if (configManager == null)
+        {
+            debugLog("configManager is null, skipping loadLastKnownCooldownFromConfig");
+            return;
         }
 
         // Load the "known cooldown" timestamp (set when the tutor explicitly rejects a claim).
@@ -180,15 +350,20 @@ public class TutorTimerPlugin extends Plugin
                 {
                     // expired or invalid - clear stored value
                     lastKnownCooldownTime = null;
-                    configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+                    safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
                 }
+
+                debugLog("loaded lastKnownCooldown=" + savedKnown);
             }
             catch (NumberFormatException e)
             {
                 lastKnownCooldownTime = null;
             }
         }
+    }
 
+    private void handleStaleClaimAfterShutdown()
+    {
         // Read shutdown timestamp and purge any stale claim if necessary
         String savedShutdown = configManager.getConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY);
         log.debug("Loaded lastShutdown config value: {}", savedShutdown);
@@ -198,16 +373,20 @@ public class TutorTimerPlugin extends Plugin
             {
                 long shutdownTs = Long.parseLong(savedShutdown);
                 Instant shutdown = Instant.ofEpochMilli(shutdownTs);
-                Instant expire = lastClaimTime.plus(COOLDOWN);
-                if (shutdown.isAfter(lastClaimTime) && shutdown.isBefore(expire))
+                if (lastClaimTime != null)
                 {
-                    // user disabled plugin during active cooldown -> state is stale
-                    log.debug("Detected stale lastClaimTime (shutdown during cooldown), clearing stored claim");
-                    lastClaimTime = null;
-                    knownOnCooldown = false;
-                    lastKnownCooldownTime = null;
-                    configManager.setConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY, null);
-                    configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+                    Instant expire = lastClaimTime.plus(COOLDOWN);
+                    if (shutdown.isAfter(lastClaimTime) && shutdown.isBefore(expire))
+                    {
+                        // user disabled plugin during active cooldown -> state is stale
+                        log.debug("Detected stale lastClaimTime (shutdown during cooldown), clearing stored claim");
+                        debugLog("stale claim cleared due to shutdown=" + shutdownTs);
+                        lastClaimTime = null;
+                        knownOnCooldown = false;
+                        lastKnownCooldownTime = null;
+                        safeClearConfig(LAST_CLAIM_KEY);
+                        safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
+                    }
                 }
             }
             catch (NumberFormatException e)
@@ -215,9 +394,6 @@ public class TutorTimerPlugin extends Plugin
                 // ignore malformed shutdown value
             }
         }
-
-        // always clear the shutdown key so it doesn't persist beyond first load
-        configManager.setConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY, null);
     }
 
     private void saveLastClaimTime()
@@ -271,7 +447,7 @@ public class TutorTimerPlugin extends Plugin
         }
 
         lastKnownCooldownTime = null;
-        configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+        safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
     }
 
     /* package-private for tests */
@@ -283,11 +459,12 @@ public class TutorTimerPlugin extends Plugin
         if (lastClaimTime != null && isReady())
         {
             log.debug("Intro while ready; clearing stale lastClaimTime");
+            debugLog("cleared stale on intro");
             lastClaimTime = null;
             knownOnCooldown = false;
             lastKnownCooldownTime = null;
-            configManager.setConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY, null);
-            configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+            safeClearConfig(LAST_CLAIM_KEY);
+            safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
         }
 
         if (lastClaimTime == null)
@@ -311,11 +488,12 @@ public class TutorTimerPlugin extends Plugin
         if (lastClaimTime != null && isReady())
         {
             log.debug("Cooldown rejection while ready; clearing stale lastClaimTime");
+            debugLog("cleared stale on rejection");
             lastClaimTime = null;
             knownOnCooldown = false;
             lastKnownCooldownTime = null;
-            configManager.setConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY, null);
-            configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+            safeClearConfig(LAST_CLAIM_KEY);
+            safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
         }
 
         lastKnownCooldownTime = Instant.now();
@@ -371,24 +549,22 @@ public class TutorTimerPlugin extends Plugin
             log.info("Known-cooldown expired in-session — clearing persisted known cooldown");
             lastKnownCooldownTime = null;
             knownOnCooldown = false;
-            if (configManager != null)
-            {
-                configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
-            }
+            safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
         }
     }
 
     // Package-private for tests
     void openLogFolder()
     {
-        String runeliteDir = System.getProperty("user.home") + "/.runelite/logs";
+        Path dir = Paths.get(System.getProperty("user.home"), ".runelite", "tutor-timer");
         try
         {
-            java.awt.Desktop.getDesktop().open(new java.io.File(runeliteDir));
+            Files.createDirectories(dir);
+            java.awt.Desktop.getDesktop().open(dir.toFile());
         }
         catch (Exception e)
         {
-            log.error("Failed to open log folder", e);
+            log.error("Failed to open plugin folder", e);
         }
     }
 
@@ -403,11 +579,12 @@ public class TutorTimerPlugin extends Plugin
             return;
         }
 
-        // if user clicked the open log folder button, try to launch the directory
+        // if user clicked the open log folder checkbox/text, open directory and clear the value
         if ("openLogFolder".equals(event.getKey()))
         {
             openLogFolder();
-            // nothing else to do; the config value remains false
+            // reset the checkbox so it remains clickable
+            configManager.setConfiguration(CONFIG_GROUP, "openLogFolder", "false");
             return;
         }
 
@@ -419,15 +596,15 @@ public class TutorTimerPlugin extends Plugin
     {
         if (lastClaimTime == null && !knownOnCooldown)
         {
-            return "Tutor Timer - claim runes or arrows to start tracking";
+            return "Tutor Timer - Claim runes or arrows to start tracking";
         }
         if (lastClaimTime == null)
         {
-            return "Tutor Timer - on cooldown, but unknown time remaining";
+            return "Tutor Timer - On cooldown, but unknown time remaining";
         }
         if (isReady())
         {
-            return "Tutor Timer - ready to claim!";
+            return "Tutor Timer - Ready to claim!";
         }
         return "Tutor Timer - " + getTimerText() + " remaining";
     }
