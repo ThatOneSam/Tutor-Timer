@@ -22,8 +22,6 @@ import lombok.extern.slf4j.Slf4j;
 
 import com.google.inject.Provides;
 
-
-
 @Slf4j
 @PluginDescriptor(
     name = "Tutor Timer",
@@ -36,13 +34,13 @@ public class TutorTimerPlugin extends Plugin
     private static final String CONFIG_GROUP = "tutortimer";
     private static final String LAST_CLAIM_KEY = "lastClaim";
     private static final String LAST_KNOWN_COOLDOWN_KEY = "lastKnownCooldown";
+    private static final String LAST_SHUTDOWN_KEY = "lastShutdown";
 
-    // Success triggers: these only appear when items are actually given
     private static final String MIKASI_GIVES = "Mikasi gives you";
     private static final String NEMARTI_GIVES = "Nemarti gives you";
-
-    // Cooldown rejection: shared between both tutors
     private static final String COOLDOWN_REJECT = "every half an hour";
+
+    private static final long KNOWN_COOLDOWN_CHECK_INTERVAL_MS = 60_000L;
 
     @Provides
     TutorTimerConfig provideConfig(ConfigManager configManager)
@@ -50,114 +48,121 @@ public class TutorTimerPlugin extends Plugin
         return configManager.getConfig(TutorTimerConfig.class);
     }
 
-    @Inject
-    private ConfigManager configManager;
+    @Inject private ConfigManager configManager;
+    @Inject private InfoBoxManager infoBoxManager;
+    @Inject private ItemManager itemManager;
+    @Inject private Notifier notifier;
+    @Inject private TutorTimerConfig config;
 
-    @Inject
-    private InfoBoxManager infoBoxManager;
-
-    @Inject
-    private ItemManager itemManager;
-
-    @Inject
-    private Notifier notifier;
-
-    @Inject
-    private TutorTimerConfig config;
-
-    @Nullable
-    private Instant lastClaimTime;
-
-    // When we observed a cooldown rejection but didn't get a claim timestamp.
-    @Nullable
-    private Instant lastKnownCooldownTime;
-
-    private boolean knownOnCooldown = false;
-    private boolean notifiedReady = false;
-    // Throttle checking for known-cooldown expiry to avoid per-tick work
-    private long lastKnownCooldownExpiryCheck = 0L;
-    private static final long KNOWN_COOLDOWN_CHECK_INTERVAL_MS = 60_000L;
-
+    @Nullable private Instant lastClaimTime;
+    @Nullable private Instant lastKnownCooldownTime;
+    private boolean knownOnCooldown;
+    private boolean notifiedReady;
     private TutorTimerInfoBox infoBox;
+    private long lastKnownCooldownExpiryCheck;
 
     @Override
     protected void startUp()
     {
-        log.info("Tutor Timer started");
-        loadLastClaimTime();
-        addInfoBox();
+        try
+        {
+            loadLastClaimTime();
+            addInfoBox();
+        }
+        catch (Exception ex)
+        {
+            log.error("Tutor Timer startup failed", ex);
+        }
     }
 
     @Override
     protected void shutDown()
     {
-        log.info("Tutor Timer stopped");
-        removeInfoBox();
-    }
-
-    private void addInfoBox()
-    {
-        removeInfoBox();
-        BufferedImage icon = itemManager.getImage(558); // MIND_RUNE item ID
-        infoBox = new TutorTimerInfoBox(icon, this);
-        infoBoxManager.addInfoBox(infoBox);
-    }
-
-    private void removeInfoBox()
-    {
-        if (infoBox != null)
+        try
         {
-            infoBoxManager.removeInfoBox(infoBox);
-            infoBox = null;
+            configManager.setConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY,
+                String.valueOf(System.currentTimeMillis()));
+            removeInfoBox();
+        }
+        catch (Exception ex)
+        {
+            log.error("Tutor Timer shutdown failed", ex);
         }
     }
 
-    private void loadLastClaimTime()
+    /**
+     * Safely clear a config key. Guards against null configManager and the
+     * NPE that ConfigManager.setConfiguration throws for null values.
+     */
+    private void safeClearConfig(String key)
     {
-        String saved = configManager.getConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY);
-        // Log what we loaded so it's easy to verify persistence at startup
-        log.debug("Loaded lastClaim config value: {}", saved);
+        if (configManager == null) return;
+        try
+        {
+            if (configManager.getConfiguration(CONFIG_GROUP, key) == null) return;
+            configManager.setConfiguration(CONFIG_GROUP, key, null);
+        }
+        catch (NullPointerException ignored) { }
+        catch (Exception ex)
+        {
+            log.error("Failed to clear config key '{}'", key, ex);
+        }
+    }
 
+    /** Load persisted state from config. Package-private for tests. */
+    void loadLastClaimTime()
+    {
+        if (configManager == null) return;
+
+        // Last claim time
+        String saved = configManager.getConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY);
         if (saved != null)
         {
-            try
-            {
-                lastClaimTime = Instant.ofEpochMilli(Long.parseLong(saved));
-            }
-            catch (NumberFormatException e)
-            {
-                lastClaimTime = null;
-            }
+            try { lastClaimTime = Instant.ofEpochMilli(Long.parseLong(saved)); }
+            catch (NumberFormatException e) { lastClaimTime = null; }
         }
 
-        // Load the "known cooldown" timestamp (set when the tutor explicitly rejects a claim).
-        // If it's recent (within COOLDOWN) and we don't have a lastClaimTime, keep knownOnCooldown.
+        // Known cooldown (set when the tutor rejects a claim)
         String savedKnown = configManager.getConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY);
-        log.debug("Loaded lastKnownCooldown config value: {}", savedKnown);
-
         if (savedKnown != null)
         {
             try
             {
                 lastKnownCooldownTime = Instant.ofEpochMilli(Long.parseLong(savedKnown));
-
-                // Use null-safe helpers to determine whether the stored known-cooldown is still active.
                 if (lastClaimTime == null && isKnownCooldownActive())
                 {
                     knownOnCooldown = true;
                 }
                 else if (!isKnownCooldownActive())
                 {
-                    // expired or invalid - clear stored value
                     lastKnownCooldownTime = null;
-                    configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+                    safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
                 }
             }
-            catch (NumberFormatException e)
-            {
-                lastKnownCooldownTime = null;
-            }
+            catch (NumberFormatException e) { lastKnownCooldownTime = null; }
         }
+
+        // Detect stale claim from mid-cooldown shutdown
+        String savedShutdown = configManager.getConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY);
+        if (savedShutdown != null && lastClaimTime != null)
+        {
+            try
+            {
+                Instant shutdown = Instant.ofEpochMilli(Long.parseLong(savedShutdown));
+                Instant expire = lastClaimTime.plus(COOLDOWN);
+                if (shutdown.isAfter(lastClaimTime) && shutdown.isBefore(expire))
+                {
+                    lastClaimTime = null;
+                    knownOnCooldown = false;
+                    lastKnownCooldownTime = null;
+                    safeClearConfig(LAST_CLAIM_KEY);
+                    safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
+                }
+            }
+            catch (NumberFormatException ignored) { }
+        }
+
+        safeClearConfig(LAST_SHUTDOWN_KEY);
     }
 
     private void saveLastClaimTime()
@@ -169,6 +174,32 @@ public class TutorTimerPlugin extends Plugin
         }
     }
 
+    private void addInfoBox()
+    {
+        try
+        {
+            removeInfoBox();
+            BufferedImage icon = itemManager.getImage(558);
+            infoBox = new TutorTimerInfoBox(icon, this);
+            infoBoxManager.addInfoBox(infoBox);
+        }
+        catch (Exception ex)
+        {
+            log.error("Unable to create info box", ex);
+        }
+    }
+
+    private void removeInfoBox()
+    {
+        if (infoBox != null)
+        {
+            infoBoxManager.removeInfoBox(infoBox);
+            infoBox = null;
+        }
+    }
+
+    // --- Event handlers ---
+
     @Subscribe
     public void onChatMessage(ChatMessage event)
     {
@@ -176,119 +207,92 @@ public class TutorTimerPlugin extends Plugin
         if (type != ChatMessageType.DIALOG
             && type != ChatMessageType.GAMEMESSAGE
             && type != ChatMessageType.SPAM
-            && type != ChatMessageType.MESBOX)
-        {
-            return;
-        }
+            && type != ChatMessageType.MESBOX) return;
 
         String msg = event.getMessage();
-        log.debug("ChatMessage received (type={}): {}", type, msg);
 
         if (msg.contains(MIKASI_GIVES) || msg.contains(NEMARTI_GIVES))
         {
-            handleTutorClaim(msg);
+            handleTutorClaim();
         }
-        else if (msg.contains("I work with the Ranged Combat tutor") || msg.contains("I work with the Magic tutor"))
+        else if (msg.contains("I work with the Ranged Combat tutor")
+              || msg.contains("I work with the Magic tutor"))
         {
-            handleTutorIntro(msg);
+            handleTutorIntro();
         }
         else if (msg.contains(COOLDOWN_REJECT))
         {
-            handleCooldownRejection(msg);
+            handleCooldownRejection();
         }
     }
 
-    private void handleTutorClaim(String msg)
+    private void handleTutorClaim()
     {
-        log.info("Tutor claim detected — recording lastClaimTime (message='{}')", msg);
         lastClaimTime = Instant.now();
         knownOnCooldown = true;
         notifiedReady = false;
         saveLastClaimTime();
-
-        if (notifier != null) {
-            notifier.notify("Tutor Timer: claim saved");
-        }
-
         lastKnownCooldownTime = null;
-        configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+        safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
     }
 
-    private void handleTutorIntro(String msg)
+    private void handleTutorIntro()
     {
-        log.info("Tutor intro detected — treating as possible known-cooldown (message='{}')", msg);
-
+        clearStaleClaim();
         if (lastClaimTime == null)
         {
             lastKnownCooldownTime = Instant.now();
             knownOnCooldown = true;
-            if (lastKnownCooldownTime != null)
-            {
-                configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY,
-                    String.valueOf(lastKnownCooldownTime.toEpochMilli()));
-            }
-        }
-    }
-
-    private void handleCooldownRejection(String msg)
-    {
-        log.info("Cooldown rejection detected — storing known-cooldown (message='{}')", msg);
-        lastKnownCooldownTime = Instant.now();
-        knownOnCooldown = true;
-        if (lastKnownCooldownTime != null)
-        {
             configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY,
                 String.valueOf(lastKnownCooldownTime.toEpochMilli()));
         }
     }
 
+    private void handleCooldownRejection()
+    {
+        clearStaleClaim();
+        lastKnownCooldownTime = Instant.now();
+        knownOnCooldown = true;
+        configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY,
+            String.valueOf(lastKnownCooldownTime.toEpochMilli()));
+    }
 
+    /** If the previous claim has expired, clear it so new tracking can start. */
+    private void clearStaleClaim()
+    {
+        if (lastClaimTime != null && isReady())
+        {
+            lastClaimTime = null;
+            knownOnCooldown = false;
+            lastKnownCooldownTime = null;
+            safeClearConfig(LAST_CLAIM_KEY);
+            safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
+        }
+    }
 
     @Subscribe
     public void onGameTick(GameTick event)
     {
-        // Handle notification
         if (config.notifyOnReady() && !notifiedReady && isReady())
         {
             notifier.notify("Your free runes and arrows are ready to claim!");
             notifiedReady = true;
         }
 
-        // Decide whether InfoBox should be visible
-        // New semantics: when `showWhenReady` is true, only show the InfoBox once the timer is ready.
-        // When it's false the InfoBox is visible at all times (preserves previous default behavior).
         boolean shouldShow = config.showInfoBox() && (!config.showWhenReady() || isReady());
+        if (!shouldShow) removeInfoBox();
+        else if (infoBox == null) addInfoBox();
 
-        if (!shouldShow)
-        {
-            removeInfoBox();
-        }
-        else if (infoBox == null)
-        {
-            addInfoBox();
-        }
-
-        // Throttled check: clear persisted known-cooldown in-session when it expires
+        // Throttled: clear persisted known-cooldown when it expires
         long now = System.currentTimeMillis();
         if (now - lastKnownCooldownExpiryCheck >= KNOWN_COOLDOWN_CHECK_INTERVAL_MS)
         {
             lastKnownCooldownExpiryCheck = now;
-            checkAndClearExpiredKnownCooldown();
-        }
-    }
-
-    // Package-private helper for tests: perform the same expiry check as the throttled onGameTick logic.
-    void checkAndClearExpiredKnownCooldown()
-    {
-        // Only clear when we don't have a real lastClaimTime and the known-cooldown has expired
-        if (lastClaimTime == null && lastKnownCooldownTime != null && !isKnownCooldownActive())
-        {
-            log.info("Known-cooldown expired in-session — clearing persisted known cooldown");
-            lastKnownCooldownTime = null;
-            knownOnCooldown = false;
-            if (configManager != null)
+            if (lastClaimTime == null && lastKnownCooldownTime != null && !isKnownCooldownActive())
             {
-                configManager.setConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY, null);
+                lastKnownCooldownTime = null;
+                knownOnCooldown = false;
+                safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
             }
         }
     }
@@ -296,69 +300,45 @@ public class TutorTimerPlugin extends Plugin
     @Subscribe
     public void onConfigChanged(ConfigChanged event)
     {
-        log.debug("ConfigChanged event received - group='{}' key='{}' oldValue='{}' newValue='{}'",
-            event.getGroup(), event.getKey(), event.getOldValue(), event.getNewValue());
-
-        if (!CONFIG_GROUP.equals(event.getGroup()))
+        if (CONFIG_GROUP.equals(event.getGroup()))
         {
-            return;
-        }
-
-        removeInfoBox();
-
-        if (notifier != null)
-        {
-            notifier.notify("Tutor Timer: saved timer cleared");
+            removeInfoBox();
         }
     }
 
-    //Tooltip text used by the InfoBox.
+    // --- InfoBox API ---
+
     public String getTooltipText()
     {
         if (lastClaimTime == null && !knownOnCooldown)
-        {
-            return "Tutor Timer - claim runes or arrows to start tracking";
-        }
+            return "Tutor Timer - Claim runes or arrows to start tracking";
         if (lastClaimTime == null)
-        {
-            return "Tutor Timer - on cooldown, but unknown time remaining";
-        }
+            return "Tutor Timer - On cooldown, but unknown time remaining";
         if (isReady())
-        {
-            return "Tutor Timer - ready to claim!";
-        }
+            return "Tutor Timer - Ready to claim!";
         return "Tutor Timer - " + getTimerText() + " remaining";
     }
 
     public String getTimerText()
     {
         if (lastClaimTime == null)
-        {
             return knownOnCooldown ? "< 30m" : "?";
-        }
 
         Duration elapsed = Duration.between(lastClaimTime, Instant.now());
         Duration remaining = COOLDOWN.minus(elapsed);
-
-        if (remaining.isNegative() || remaining.isZero())
-        {
-            return "Ready!";
-        }
+        if (remaining.isNegative() || remaining.isZero()) return "Ready!";
 
         long minutes = remaining.toMinutes();
         long seconds = remaining.getSeconds() % 60;
-
-        if (config.showSeconds())
-        {
-            return String.format("%d:%02d", minutes, seconds);
-        }
-        return String.format("%dm", minutes);
+        return config.showSeconds()
+            ? String.format("%d:%02d", minutes, seconds)
+            : String.format("%dm", minutes);
     }
 
     public boolean isReady()
     {
-        if (lastClaimTime == null) return false;
-        return Duration.between(lastClaimTime, Instant.now()).compareTo(COOLDOWN) >= 0;
+        return lastClaimTime != null
+            && Duration.between(lastClaimTime, Instant.now()).compareTo(COOLDOWN) >= 0;
     }
 
     public boolean isUnknown()
@@ -366,37 +346,9 @@ public class TutorTimerPlugin extends Plugin
         return lastClaimTime == null;
     }
 
-    // Returns true if a cooldown rejection occurred recently (i.e., within COOLDOWN)
-    public boolean isKnownCooldownActive()
+    private boolean isKnownCooldownActive()
     {
-        if (lastKnownCooldownTime == null)
-        {
-            return false;
-        }
-        Instant expireTime = lastKnownCooldownTime.plus(COOLDOWN);
-        return Instant.now().isBefore(expireTime);
-    }
-    
-    // Returns remaining duration for a known cooldown or Duration. ZERO when none/expired.
-    public Duration getKnownCooldownRemaining()
-    {
-        if (lastKnownCooldownTime == null)
-        {
-            return Duration.ZERO;
-        }
-
-        Instant expireTime = lastKnownCooldownTime.plus(COOLDOWN);
-        Duration remaining = Duration.between(Instant.now(), expireTime);
-        if (remaining.isNegative())
-        {
-            return Duration.ZERO;
-        }
-        return remaining;
-    }
-
-    // Package-private setter for tests
-    void setLastKnownCooldownTime(Instant instant)
-    {
-        this.lastKnownCooldownTime = instant;
+        return lastKnownCooldownTime != null
+            && Instant.now().isBefore(lastKnownCooldownTime.plus(COOLDOWN));
     }
 }
