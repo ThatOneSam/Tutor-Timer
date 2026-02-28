@@ -90,46 +90,6 @@ public class TutorTimerPlugin extends Plugin
         }
     }
 
-    // Attempt to remove a persisted value from the config.  We perform a
-    // quick existence check first to avoid unnecessary work, but the underlying
-    // ConfigManager API has a long‑standing bug: it declares the `value`
-    // parameter @NonNull and immediately throws a NullPointerException when it
-    // receives `null` even though passing `null` is the documented way to clear
-    // an entry.  There is no public "remove" method, so we still need to call
-    // `setConfiguration(..., null)` when an existing value is present.  The
-    // NPE catch below is therefore *not* a blanket catch‑all; it is a specific
-    // guard around this broken behaviour and is logged at debug level so that
-    // it never spams the normal log.
-    private void safeClearConfig(String key)
-    {
-        if (configManager == null)
-        {
-            return;
-        }
-
-        String existing = configManager.getConfiguration(CONFIG_GROUP, key);
-        if (existing == null)
-        {
-            // nothing to do; we don't even call setConfiguration
-            return;
-        }
-
-        try
-        {
-            configManager.setConfiguration(CONFIG_GROUP, key, null);
-        }
-        catch (NullPointerException npe)
-        {
-            // swallowed: the manager rejects null values.  we treat the key as
-            // cleared regardless and log at debug in case the implementation
-            // changes later.
-            log.debug("ignored NPE clearing config {}: {}", key, npe.toString());
-        }
-        catch (Exception ex)
-        {
-            log.error("Failed to clear config key '{}'", key, ex);
-        }
-    }
 
     // Load persisted state from config. Package-private for tests.
     void loadLastClaimTime()
@@ -139,7 +99,10 @@ public class TutorTimerPlugin extends Plugin
         loadLastClaimTimeFromConfig();
         loadLastKnownCooldownFromConfig();
         detectStaleClaim();
-        safeClearConfig(LAST_SHUTDOWN_KEY);
+        if (configManager != null)
+        {
+            configManager.unsetConfiguration(CONFIG_GROUP, LAST_SHUTDOWN_KEY);
+        }
     }
 
     private void loadLastClaimTimeFromConfig()
@@ -167,7 +130,10 @@ public class TutorTimerPlugin extends Plugin
                 else if (!isKnownCooldownActive())
                 {
                     lastKnownCooldownTime = java.util.Optional.empty();
-                    safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
+                    if (configManager != null)
+                    {
+                        configManager.unsetConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY);
+                    }
                 }
             }
             catch (NumberFormatException e) { lastKnownCooldownTime = java.util.Optional.empty(); }
@@ -188,8 +154,11 @@ public class TutorTimerPlugin extends Plugin
                     lastClaimTime = java.util.Optional.empty();
                     knownOnCooldown = false;
                     lastKnownCooldownTime = java.util.Optional.empty();
-                    safeClearConfig(LAST_CLAIM_KEY);
-                    safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
+                    if (configManager != null)
+                    {
+                        configManager.unsetConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY);
+                        configManager.unsetConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY);
+                    }
                 }
             }
             catch (NumberFormatException e)
@@ -272,7 +241,10 @@ public class TutorTimerPlugin extends Plugin
         notifiedReady = false;
         saveLastClaimTime();
         lastKnownCooldownTime = java.util.Optional.empty();
-        safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
+        if (configManager != null)
+        {
+            configManager.unsetConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY);
+        }
     }
 
     private void handleTutorIntro()
@@ -304,8 +276,11 @@ public class TutorTimerPlugin extends Plugin
             lastClaimTime = java.util.Optional.empty();
             knownOnCooldown = false;
             lastKnownCooldownTime = java.util.Optional.empty();
-            safeClearConfig(LAST_CLAIM_KEY);
-            safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
+            if (configManager != null)
+            {
+                configManager.unsetConfiguration(CONFIG_GROUP, LAST_CLAIM_KEY);
+                configManager.unsetConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY);
+            }
         }
     }
 
@@ -331,7 +306,10 @@ public class TutorTimerPlugin extends Plugin
             {
                 lastKnownCooldownTime = java.util.Optional.empty();
                 knownOnCooldown = false;
-                safeClearConfig(LAST_KNOWN_COOLDOWN_KEY);
+                if (configManager != null)
+                {
+                    configManager.unsetConfiguration(CONFIG_GROUP, LAST_KNOWN_COOLDOWN_KEY);
+                }
             }
         }
     }

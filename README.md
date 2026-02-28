@@ -1,5 +1,6 @@
-# Tutor Timer 
-*Version: 1.2.0*
+# Tutor Timer
+
+Version: 1.2.1
 
 [![Build](https://github.com/ThatOneSam/Tutor-Timer/actions/workflows/build.yml/badge.svg)](https://github.com/ThatOneSam/Tutor-Timer/actions/workflows/build.yml)
 

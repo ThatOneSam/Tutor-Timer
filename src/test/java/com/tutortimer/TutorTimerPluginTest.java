@@ -290,7 +290,6 @@ public class TutorTimerPluginTest
         TutorTimerPlugin plugin = new TutorTimerPlugin();
         long now = System.currentTimeMillis();
         long claim = now - Duration.ofMinutes(10).toMillis();
-        long shutdown = -1; // not used
 
         ConfigManager cfg = mock(ConfigManager.class);
         when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn(String.valueOf(claim));
@@ -338,33 +337,6 @@ public class TutorTimerPluginTest
         verify(cfg).setConfiguration(eq("tutortimer"), eq("lastShutdown"), anyString());
     }
 
-    @Test
-    public void safeClearConfig_ignoresNullPointerOnClear() throws Exception
-    {
-        TutorTimerPlugin plugin = new TutorTimerPlugin();
-        ConfigManager cfg = mock(ConfigManager.class);
-
-        // simulate existing value, and throw NPE when attempting to clear it
-        when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn("existing");
-        doAnswer(invocation -> {
-            Object value = invocation.getArgument(2);
-            if (value == null)
-            {
-                throw new NullPointerException("value is marked non-null but is null");
-            }
-            return null;
-        }).when(cfg).setConfiguration(anyString(), anyString(), anyString());
-
-        setField(plugin, "configManager", cfg);
-
-        // call the private helper via reflection; any exception would fail the test
-        java.lang.reflect.Method m = TutorTimerPlugin.class.getDeclaredMethod("safeClearConfig", String.class);
-        m.setAccessible(true);
-        m.invoke(plugin, "lastClaim");
-
-        // also verify we attempted to clear it once
-        verify(cfg).setConfiguration("tutortimer", "lastClaim", null);
-    }
 
     @Test
     public void startUp_survivesConfigExceptions() throws Exception
@@ -379,12 +351,13 @@ public class TutorTimerPluginTest
         when(cfg.getConfiguration("tutortimer", "lastKnownCooldown")).thenReturn(null);
 
         doThrow(new NullPointerException("value is marked non-null but is null"))
-            .when(cfg).setConfiguration(eq("tutortimer"), eq("lastShutdown"), isNull());
+            .when(cfg).unsetConfiguration("tutortimer", "lastShutdown");
 
         setField(plugin, "configManager", cfg);
 
         // should not propagate despite the exception bubbling out of the mock
         plugin.startUp();
+        assertNotNull(plugin);
     }
 
     @Test
