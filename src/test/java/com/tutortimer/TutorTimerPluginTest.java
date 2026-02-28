@@ -339,6 +339,55 @@ public class TutorTimerPluginTest
     }
 
     @Test
+    public void safeClearConfig_ignoresNullPointerOnClear() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        ConfigManager cfg = mock(ConfigManager.class);
+
+        // simulate existing value, and throw NPE when attempting to clear it
+        when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn("existing");
+        doAnswer(invocation -> {
+            Object value = invocation.getArgument(2);
+            if (value == null)
+            {
+                throw new NullPointerException("value is marked non-null but is null");
+            }
+            return null;
+        }).when(cfg).setConfiguration(anyString(), anyString(), anyString());
+
+        setField(plugin, "configManager", cfg);
+
+        // call the private helper via reflection; any exception would fail the test
+        java.lang.reflect.Method m = TutorTimerPlugin.class.getDeclaredMethod("safeClearConfig", String.class);
+        m.setAccessible(true);
+        m.invoke(plugin, "lastClaim");
+
+        // also verify we attempted to clear it once
+        verify(cfg).setConfiguration("tutortimer", "lastClaim", null);
+    }
+
+    @Test
+    public void startUp_survivesConfigExceptions() throws Exception
+    {
+        TutorTimerPlugin plugin = new TutorTimerPlugin();
+        ConfigManager cfg = mock(ConfigManager.class);
+
+        // make getConfiguration return some values so that loadLastClaimTime
+        // performs a clear and triggers our mocked NPE above
+        when(cfg.getConfiguration("tutortimer", "lastShutdown")).thenReturn("123");
+        when(cfg.getConfiguration("tutortimer", "lastClaim")).thenReturn(null);
+        when(cfg.getConfiguration("tutortimer", "lastKnownCooldown")).thenReturn(null);
+
+        doThrow(new NullPointerException("value is marked non-null but is null"))
+            .when(cfg).setConfiguration(eq("tutortimer"), eq("lastShutdown"), isNull());
+
+        setField(plugin, "configManager", cfg);
+
+        // should not propagate despite the exception bubbling out of the mock
+        plugin.startUp();
+    }
+
+    @Test
     public void startUp_doesNotThrowOnNullDependencies()
     {
         TutorTimerPlugin plugin = new TutorTimerPlugin();
