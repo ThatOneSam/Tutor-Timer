@@ -30,7 +30,7 @@ dependencies {
 }
 
 group = 'com.tutortimer'
-version = '1.2.5'
+version = '1.2.4'
 
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'

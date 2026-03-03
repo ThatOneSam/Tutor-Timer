@@ -1,6 +1,6 @@
 # Tutor Timer
 
-Version: 1.2.5
+Version: 1.2.4
 
 [![Build](https://github.com/ThatOneSam/Tutor-Timer/actions/workflows/build.yml/badge.svg)](https://github.com/ThatOneSam/Tutor-Timer/actions/workflows/build.yml)
 
@@ -31,11 +31,7 @@ when to come back. The timer shows up as an info box with a mind‑rune icon.
   successful claim).
 - **Ready!** – Go grab your free stuff!
 
-> _Note:_ the **< 30m** indicator only appears when the plugin observes the
-> tutor chat messages but doesn’t see the “gives you” text. In-game this
-> happens if you open the dialogue and then close it, or if the tutor replies
-> “every half an hour”; the plugin still knows you triggered a cooldown even
-> though it doesn’t know the exact start time.
+> _Note:_ the **< 30m** indicator only appears when the plugin observes the tutor chat messages but doesn’t see the “gives you” text. In-game this happens if you open the dialogue and then close it without getting runes/arrows, or if the tutor replies a message that includes the phrase “every half an hour”. The plugin will still know you triggered a cooldown even though it doesn’t know the exact start time.
 
 ---
 
