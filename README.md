@@ -32,12 +32,11 @@ when to come back. The timer shows up as an info box with a mind‑rune icon.
 ## Settings
 
 - **Show info box only when ready** – when enabled, the info box is hidden
-  until the cooldown expires and the timer shows **Ready!**. (Default:
-  disabled; info box is shown at all times.)
-- **Show info box** – master switch for displaying the info box.
+  until the cooldown expires and the timer shows **Ready!**
+- **Show info box** – master switch for displaying the info box
 - **Notify when ready** – send a desktop notification when the cooldown
-  expires.
-- **Show seconds** – toggle seconds in the countdown display.
+  expires
+- **Show seconds** – toggle seconds in the countdown display
 
 ---
 
