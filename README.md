@@ -12,7 +12,7 @@ claiming free runes and training arrows from the combat tutors in Lumbridge.
 ## How It Works
 
 Every 30 minutes you can visit the **Magic Combat Tutor** to get 30 air runes and
-30 mind runes. Or you can go to the **Ranged Combat Tutor** for 30 training
+30 mind runes. Or you can go to the **Ranged Combat Tutor** for 25 training
 arrows. The two tutors share the same 30‑minute cooldown; claiming from either
 one starts the timer for both.
 
