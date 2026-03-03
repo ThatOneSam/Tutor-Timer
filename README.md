@@ -1,6 +1,6 @@
 # Tutor Timer
 
-Version: 1.2.3
+Version: 1.2.4
 
 [![Build](https://github.com/ThatOneSam/Tutor-Timer/actions/workflows/build.yml/badge.svg)](https://github.com/ThatOneSam/Tutor-Timer/actions/workflows/build.yml)
 
@@ -21,11 +21,9 @@ when to come back. The timer shows up as an info box with a mind‑rune icon.
 
 ### Timer States
 
-| Display     | Meaning                                                         |
-|-------------|-----------------------------------------------------------------|
-| `?`         | Plugin hasn’t seen you claim yet – claim once to start tracking |
-| `12:34`     | Time remaining until you can claim again                        |
-| **Ready!**  | Go grab your free stuff!                                        |
+- **?** – Plugin hasn’t seen you claim yet – claim once to start tracking
+- **12:34** – Time remaining until you can claim again
+- **Ready!** – Go grab your free stuff!
 
 ---
 
