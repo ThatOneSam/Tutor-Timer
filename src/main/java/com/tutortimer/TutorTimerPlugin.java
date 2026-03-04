@@ -289,7 +289,7 @@ public class TutorTimerPlugin extends Plugin
     {
         if (config.notifyOnReady() && !notifiedReady && isReady())
         {
-            notifier.notify("Your free runes and arrows are ready to claim!");
+            notifier.notify("Your free runes or arrows are ready to claim!");
             notifiedReady = true;
         }
 
